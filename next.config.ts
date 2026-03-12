@@ -5,6 +5,7 @@ const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
 const nextConfig: NextConfig = {
   output: "standalone",
+  serverExternalPackages: ["better-sqlite3"],
 };
 
 export default withNextIntl(nextConfig);
