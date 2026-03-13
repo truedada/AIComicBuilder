@@ -2,7 +2,7 @@ import { create } from "zustand";
 import { persist } from "zustand/middleware";
 import { ulid } from "ulid";
 
-export type Protocol = "openai" | "gemini" | "seedance";
+export type Protocol = "openai" | "gemini" | "seedance" | "kling";
 export type Capability = "text" | "image" | "video";
 
 export interface Model {
@@ -15,7 +15,7 @@ export interface Provider {
   id: string;
   name: string;
   protocol: Protocol;
-  capabilities: Capability[];
+  capability: Capability;
   baseUrl: string;
   apiKey: string;
   models: Model[];
@@ -160,6 +160,36 @@ export const useModelStore = create<ModelStore>()(
         };
       },
     }),
-    { name: "model-store" }
+    {
+      name: "model-store",
+      version: 2,
+      migrate: (persistedState: unknown, fromVersion: number) => {
+        // Called only when stored data has an explicit version number that differs from 2.
+        // For data with no version field (legacy), the merge function below handles migration.
+        if (fromVersion < 2) {
+          const state = persistedState as Record<string, unknown>;
+          const providers = (state.providers as Array<Record<string, unknown>>) ?? [];
+          return {
+            ...state,
+            providers: providers.map((p) => {
+              const caps = (p.capabilities as string[]) ?? [];
+              return { ...p, capability: caps[0] ?? "text" };
+            }),
+          };
+        }
+        return persistedState;
+      },
+      merge: (persistedState: unknown, currentState) => {
+        // Handles legacy stored data that has no version field (Zustand skips migrate in that case).
+        const ps = persistedState as Record<string, unknown>;
+        const providers = (ps?.providers as Array<Record<string, unknown>>) ?? [];
+        const migrated = providers.map((p) => {
+          if (typeof p.capability === "string") return p; // already migrated
+          const caps = (p.capabilities as string[]) ?? [];
+          return { ...p, capability: caps[0] ?? "text" };
+        });
+        return { ...currentState, ...ps, providers: migrated };
+      },
+    }
   )
 );
