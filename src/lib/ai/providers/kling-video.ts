@@ -80,9 +80,8 @@ export class KlingVideoProvider implements VideoProvider {
 
     if ("firstFrame" in params) {
       // ── Keyframe mode: image2video ──
-      const kp = params as { firstFrame: string; lastFrame: string };
-      const imageData = toBase64(kp.firstFrame);
-      const tailImageData = toBase64(kp.lastFrame);
+      const imageData = toBase64(params.firstFrame!);
+      const tailImageData = toBase64(params.lastFrame!);
 
       console.log(
         `[Kling Video] image2video: model=${this.model}, duration=${duration}s, ratio=${aspectRatio}`
@@ -142,7 +141,8 @@ export class KlingVideoProvider implements VideoProvider {
 
       // Fallback: if reference_image is unsupported (400/422), retry without it
       if (submitRes.status === 400 || submitRes.status === 422) {
-        console.warn(`[Kling Video] text2video reference_image rejected (${submitRes.status}), retrying without ref images`);
+        const fallbackBody = await submitRes.text().catch(() => "");
+        console.warn(`[Kling Video] text2video reference_image rejected (${submitRes.status}: ${fallbackBody}), retrying without ref images`);
         submitRes = await fetch(`${this.baseUrl}/v1/videos/text2video`, {
           method: "POST",
           headers: {
