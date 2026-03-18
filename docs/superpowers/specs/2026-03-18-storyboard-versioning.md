@@ -90,7 +90,7 @@ The `handleShotSplitStream` function returns a streaming text response (`result.
 
 ### Switching Versions
 
-Pure frontend state update — no API write. Frontend calls `fetchProject(versionId)` with the selected `versionId` to load that version's shots.
+Pure frontend state update — no API write. Frontend calls `fetchProject(project.id, versionId)` with the selected `versionId` to load that version's shots.
 
 ### Default Version on Page Load
 
@@ -163,11 +163,12 @@ New optional query parameter: `?versionId=<id>`
   ```json
   {
     "versions": [
-      { "id": "...", "label": "20260318-V2", "versionNum": 2, "createdAt": 1234567890000 },
-      { "id": "...", "label": "20260318-V1", "versionNum": 1, "createdAt": 1234500000000 }
+      { "id": "...", "label": "20260318-V2", "versionNum": 2, "createdAt": 1742300000 },
+      { "id": "...", "label": "20260318-V1", "versionNum": 1, "createdAt": 1742200000 }
     ]
   }
   ```
+  `createdAt` is Unix seconds (10-digit), matching the `mode: "timestamp"` storage in SQLite.
   Always returned (even when requesting a specific `versionId`), ordered by `version_num` descending (newest first).
 
 ### `POST /api/projects/[id]/generate` — `shot_split` action
