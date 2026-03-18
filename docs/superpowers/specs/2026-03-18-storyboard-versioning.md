@@ -24,7 +24,7 @@ Example: `20260318-V1`, `20260318-V2`, `20260319-V3`.
 | `project_id` | TEXT | FK → `projects.id` (CASCADE DELETE) |
 | `label` | TEXT | e.g. `"20260318-V1"` |
 | `version_num` | INT | Increments per project (1, 2, 3…) |
-| `created_at` | INT | Unix timestamp ms |
+| `created_at` | INT | Unix timestamp in seconds (`mode: "timestamp"`, same as `projects.created_at`) |
 
 ### `shots` Table: New Column
 
@@ -32,17 +32,48 @@ Example: `20260318-V1`, `20260318-V2`, `20260319-V3`.
 |--------|------|-------|
 | `version_id` | TEXT | FK → `storyboard_versions.id` (CASCADE DELETE), nullable |
 
+`CASCADE DELETE` on `version_id` is intentional: if a version record is deleted, all its shots are also deleted. Version deletion is out of scope for this feature, so this cascade acts as a safety mechanism for future cleanup only.
+
 ### No changes to `projects` table
 
 The active version is tracked purely in frontend state (React `useState`), not persisted server-side.
 
 ### Migration
 
-For each project that already has shots:
-1. Create a `storyboard_versions` record using `projects.created_at` date as label date, `version_num = 1` (e.g. `"20260310-V1"`).
-2. Set `version_id` on all existing shots for that project to the new record's `id`.
+Migration `0007_add_storyboard_versions.sql`:
 
-Projects with no shots receive no version record; `versions` array will be empty on load.
+```sql
+-- 1. Create the new table
+CREATE TABLE storyboard_versions (
+  id TEXT PRIMARY KEY,
+  project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
+  label TEXT NOT NULL,
+  version_num INTEGER NOT NULL,
+  created_at INTEGER NOT NULL  -- Unix seconds, same mode as projects.created_at
+);
+
+-- 2. Add version_id to shots (nullable for backwards compatibility)
+ALTER TABLE shots ADD COLUMN version_id TEXT REFERENCES storyboard_versions(id) ON DELETE CASCADE;
+
+-- 3. Backfill: create a V1 version for each project that already has shots
+INSERT INTO storyboard_versions (id, project_id, label, version_num, created_at)
+SELECT
+  lower(hex(randomblob(16))) AS id,
+  p.id AS project_id,
+  strftime('%Y%m%d', datetime(p.created_at, 'unixepoch')) || '-V1' AS label,
+  1 AS version_num,
+  p.created_at AS created_at  -- copy seconds directly
+FROM projects p
+WHERE EXISTS (SELECT 1 FROM shots s WHERE s.project_id = p.id);
+
+-- 4. Assign existing shots to their project's V1 version
+UPDATE shots
+SET version_id = (
+  SELECT sv.id FROM storyboard_versions sv
+  WHERE sv.project_id = shots.project_id AND sv.version_num = 1
+)
+WHERE version_id IS NULL;
+```
 
 ---
 
@@ -50,11 +81,12 @@ Projects with no shots receive no version record; `versions` array will be empty
 
 ### Creating a New Version (shot_split)
 
-1. Query `MAX(version_num)` for the project → N (0 if no versions yet).
-2. Create `storyboard_versions` record: `version_num = N+1`, `label = "YYYYMMDD-V{N+1}"` (today's date).
+1. Query `MAX(version_num)` for the project → N (0 if no versions exist yet).
+2. Create `storyboard_versions` record: `version_num = N+1`, `label = "YYYYMMDD-V{N+1}"` (today's date UTC).
 3. Insert all new shots with `version_id` pointing to the new record.
 4. **Do not delete old shots.** All previous versions remain intact.
-5. Return the new `versionId` and `label` in the API response.
+
+The `handleShotSplitStream` function returns a streaming text response (`result.toTextStreamResponse()`). No JSON metadata is returned in the stream. The frontend discovers the new version by calling `fetchProject()` (no `versionId`) after the stream completes — the API returns the latest version by default, and the frontend initialises `selectedVersionId` from `versions[0].id`.
 
 ### Switching Versions
 
@@ -62,23 +94,60 @@ Pure frontend state update — no API write. Frontend calls `fetchProject(versio
 
 ### Default Version on Page Load
 
-`fetchProject()` with no `versionId` returns the version with the highest `version_num` (latest). Frontend initialises `selectedVersionId` to this version's `id`.
+`fetchProject()` with no `versionId` returns the version with the highest `version_num` (latest). If no versions exist (no storyboard generated yet), returns empty shots array and empty `versions` array.
 
 ---
 
 ## File Path Isolation
 
-All generated files (first frame, last frame, video, scene ref frame, reference video) use a version-scoped path:
+### Current Path Structure
 
-```
-uploads/projects/{projectId}/{versionLabel}/{shotId}-first.png
-uploads/projects/{projectId}/{versionLabel}/{shotId}-last.png
-uploads/projects/{projectId}/{versionLabel}/{shotId}-video.mp4
-uploads/projects/{projectId}/{versionLabel}/{shotId}-scene-ref.png
-uploads/projects/{projectId}/{versionLabel}/{shotId}-reference-video.mp4
+All providers write files under a shared `uploadDir` (default `./uploads`), using subdirectories:
+- Images/frames: `{uploadDir}/frames/{ulid}.png`
+- Videos: `{uploadDir}/videos/{ulid}.mp4`
+- Reference images: `{uploadDir}/images/{ulid}.png`
+
+### New Path Structure
+
+Files are written to a version-scoped subdirectory:
+- Images/frames: `{baseUploadDir}/projects/{projectId}/{versionLabel}/frames/{ulid}.png`
+- Videos: `{baseUploadDir}/projects/{projectId}/{versionLabel}/videos/{ulid}.mp4`
+- Reference images: `{baseUploadDir}/projects/{projectId}/{versionLabel}/images/{ulid}.png`
+
+### Implementation Mechanism
+
+All provider classes (`GeminiProvider`, `OpenAIProvider`, `KlingImageProvider`, `KlingVideoProvider`, `VeoProvider`, `SeedanceProvider`) already accept `uploadDir` as a constructor parameter. The fix threads a version-scoped `uploadDir` through the provider factory:
+
+**`provider-factory.ts`** — add optional `uploadDir` param to `createAIProvider`, `createVideoProvider`, `resolveImageProvider`, `resolveVideoProvider`. `resolveAIProvider` (text-only, no file writes) does **not** need `uploadDir`.
+
+```typescript
+export function resolveImageProvider(modelConfig?: ModelConfigPayload, uploadDir?: string): AIProvider
+export function resolveVideoProvider(modelConfig?: ModelConfigPayload, uploadDir?: string): VideoProvider
 ```
 
-All generation handlers (single and batch, in `route.ts` and `pipeline/video-generate.ts`) must resolve the version label by joining `storyboard_versions` via the shot's `version_id` before constructing any file path.
+Each function passes `uploadDir` into the provider constructor when instantiating.
+
+**In all generation handlers** (`route.ts` + `pipeline/video-generate.ts`): before calling `resolveImageProvider` / `resolveVideoProvider`, obtain the version label and build the scoped upload dir:
+
+```typescript
+// Fetch versionLabel for the shot being processed
+const [version] = await db
+  .select({ label: storyboardVersions.label })
+  .from(storyboardVersions)
+  .where(eq(storyboardVersions.id, shot.version_id!));
+const versionLabel = version?.label ?? "unversioned";
+
+const versionedUploadDir = path.join(
+  process.env.UPLOAD_DIR || "./uploads",
+  "projects", projectId, versionLabel
+);
+
+const ai = resolveImageProvider(modelConfig, versionedUploadDir);
+// or
+const videoProvider = resolveVideoProvider(modelConfig, versionedUploadDir);
+```
+
+For batch handlers, the version label is fetched once outside the loop (all shots in a batch share the same version).
 
 ---
 
@@ -99,23 +168,15 @@ New optional query parameter: `?versionId=<id>`
     ]
   }
   ```
-  Ordered by `version_num` descending (newest first).
+  Always returned (even when requesting a specific `versionId`), ordered by `version_num` descending (newest first).
 
 ### `POST /api/projects/[id]/generate` — `shot_split` action
 
-Additional response fields:
-```json
-{
-  "versionId": "...",
-  "versionLabel": "20260318-V2"
-}
-```
-
-Frontend uses these to automatically switch to the new version after generation completes.
+No change to response format (still a streaming text response). Frontend learns the new version from the subsequent `fetchProject()` call.
 
 ### No new endpoints needed for version switching
 
-Version switching is a frontend-only state change followed by a `GET /api/projects/[id]?versionId=xxx`.
+Version switching is a frontend-only state change followed by `GET /api/projects/[id]?versionId=xxx`.
 
 ---
 
@@ -125,7 +186,7 @@ Version switching is a frontend-only state change followed by a `GET /api/projec
 
 New type:
 ```typescript
-type StoryboardVersion = {
+export type StoryboardVersion = {
   id: string;
   label: string;
   versionNum: number;
@@ -138,6 +199,27 @@ type StoryboardVersion = {
 versions: StoryboardVersion[];   // all versions, newest first
 ```
 
+**`fetchProject` signature update** — add optional `versionId` second param:
+```typescript
+// Before:
+fetchProject: (id: string) => Promise<void>
+// After:
+fetchProject: (id: string, versionId?: string) => Promise<void>
+```
+
+The implementation passes `versionId` as a query param:
+```typescript
+fetchProject: async (id: string, versionId?: string) => {
+  set({ loading: true });
+  const url = `/api/projects/${id}${versionId ? `?versionId=${versionId}` : ""}`;
+  const res = await apiFetch(url);
+  const data = await res.json();
+  set({ project: data, loading: false });
+},
+```
+
+All existing call sites `fetchProject(project.id)` remain valid (versionId defaults to undefined).
+
 ### `src/app/[locale]/project/[id]/storyboard/page.tsx`
 
 **New state:**
@@ -146,11 +228,11 @@ const [selectedVersionId, setSelectedVersionId] = useState<string | null>(null);
 const [versions, setVersions] = useState<StoryboardVersion[]>([]);
 ```
 
-**`fetchProject` update:** Accept optional `versionId` param and pass it as query string.
+`versions` is populated from `project.versions` whenever `project` changes in the store (via a `useEffect` watching `project`). If `selectedVersionId` is null when versions arrive, initialise it to `project.versions[0]?.id ?? null`.
 
-**On fetch response:** Populate `versions` state; if `selectedVersionId` is null, initialise it to `versions[0]?.id` (latest).
+**After `handleGenerateShots` stream completes:** Call `fetchProject(project.id)` with no `versionId` (fetches latest). The new version will appear as `project.versions[0]`; the `useEffect` auto-sets `selectedVersionId` to it.
 
-**After `handleGenerateShots` completes:** Parse `versionId` from response, call `fetchProject(versionId)`, and set `selectedVersionId` to the new version.
+**When switching versions:** Call `fetchProject(project.id, versionId)` to load that version's shots, then set `selectedVersionId`.
 
 **Version switcher component** — placed in the Step 1 controls row, immediately after the "生成分镜" button:
 
@@ -158,7 +240,7 @@ const [versions, setVersions] = useState<StoryboardVersion[]>([]);
 {versions.length > 0 && (
   <Select value={selectedVersionId ?? ""} onValueChange={(v) => {
     setSelectedVersionId(v);
-    fetchProject(v);
+    fetchProject(project!.id, v);
   }}>
     <SelectTrigger size="sm" className="w-36">
       <SelectValue />
@@ -174,9 +256,9 @@ const [versions, setVersions] = useState<StoryboardVersion[]>([]);
 
 Hidden when `versions.length === 0` (no storyboard generated yet).
 
-### Preview Page & Assembly Page
+### Preview Page
 
-Read `versionId` from URL query param (`searchParams.get("versionId")`). Pass it when fetching project shots. The storyboard page must append `?versionId={selectedVersionId}` to all navigation links/buttons that go to preview or assembly.
+`src/app/[locale]/project/[id]/preview/page.tsx` reads `versionId` from URL query param (`searchParams.get("versionId")`), passes it when fetching project shots via `apiFetch`. The storyboard page appends `?versionId={selectedVersionId}` to the preview navigation link.
 
 ---
 
@@ -185,19 +267,20 @@ Read `versionId` from URL query param (`searchParams.get("versionId")`). Pass it
 | File | Change |
 |------|--------|
 | `src/lib/db/schema.ts` | Add `storyboard_versions` table; add `version_id` to `shots` |
-| `drizzle/0007_add_storyboard_versions.sql` | Migration SQL |
-| `drizzle/meta/_journal.json` | Add migration entry |
-| `src/app/api/projects/[id]/route.ts` | Filter shots by `versionId`; include `versions` in response |
-| `src/app/api/projects/[id]/generate/route.ts` | `shot_split`: create version record, bind shots; all file-path generation uses `versionLabel` |
-| `src/lib/pipeline/video-generate.ts` | File path uses `versionLabel` |
-| `src/stores/project-store.ts` | Add `StoryboardVersion` type; add `versions` to `Project` |
-| `src/app/[locale]/project/[id]/storyboard/page.tsx` | Version state, switcher UI, `fetchProject(versionId)`, navigation links |
-| `src/app/[locale]/project/[id]/preview/page.tsx` | Read `versionId` from query params |
+| `drizzle/0007_add_storyboard_versions.sql` | Migration SQL (see Data Model section) |
+| `drizzle/meta/_journal.json` | Add migration entry for `0007` |
+| `src/app/api/projects/[id]/route.ts` | Filter shots by `versionId` query param; include `versions` array in response |
+| `src/app/api/projects/[id]/generate/route.ts` | `shot_split`: create version record, bind shots to it; all generation handlers fetch version label and pass version-scoped `uploadDir` to providers |
+| `src/lib/ai/provider-factory.ts` | Add optional `uploadDir` param to `createAIProvider`, `createVideoProvider`, `resolveImageProvider`, `resolveVideoProvider` |
+| `src/lib/pipeline/video-generate.ts` | Fetch version label from DB; pass version-scoped `uploadDir` to provider |
+| `src/stores/project-store.ts` | Add `StoryboardVersion` type; add `versions: StoryboardVersion[]` to `Project` type |
+| `src/app/[locale]/project/[id]/storyboard/page.tsx` | Version state, switcher UI, `fetchProject(versionId?)`, navigation to preview |
+| `src/app/[locale]/project/[id]/preview/page.tsx` | Read `versionId` from query params; pass to `apiFetch` |
 
 ## Non-Goals
 
 - No server-side persistence of "current version" on the project record.
-- No version deletion UI (versions accumulate; cleanup out of scope).
+- No version deletion UI (versions accumulate; cleanup is a future concern).
 - No version renaming or descriptions.
 - No merging of versions.
-- Single-shot rewrite and individual shot edits operate on the shot's existing version — no version branching from edits.
+- Single-shot rewrite (`single_shot_rewrite`) and individual shot field edits operate on the shot's existing `version_id` — no version branching. No code changes needed for these handlers.
