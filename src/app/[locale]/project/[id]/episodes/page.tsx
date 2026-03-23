@@ -1,13 +1,14 @@
 "use client";
 
 import { useEffect, useState, use } from "react";
-import { useTranslations } from "next-intl";
-import { Layers, Plus, Loader2 } from "lucide-react";
+import { useTranslations, useLocale } from "next-intl";
+import { Layers, Plus, Loader2, Users } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { EpisodeCard } from "@/components/editor/episode-card";
 import { EpisodeDialog } from "@/components/editor/episode-dialog";
 import { useEpisodeStore, type Episode } from "@/stores/episode-store";
+import Link from "next/link";
 
 export default function EpisodesPage({
   params,
@@ -15,6 +16,7 @@ export default function EpisodesPage({
   params: Promise<{ id: string }>;
 }) {
   const { id: projectId } = use(params);
+  const locale = useLocale();
   const t = useTranslations("episode");
   const tc = useTranslations("common");
   const {
@@ -84,10 +86,21 @@ export default function EpisodesPage({
             </p>
           </div>
         </div>
-        <Button onClick={() => setCreateOpen(true)} size="sm">
-          <Plus className="mr-1.5 h-4 w-4" />
-          {t("create")}
-        </Button>
+        <div className="flex items-center gap-2">
+          {episodes.length > 0 && (
+            <Link
+              href={`/${locale}/project/${projectId}/episodes/${episodes[0]?.id}/characters`}
+              className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium shadow-xs hover:bg-accent hover:text-accent-foreground"
+            >
+              <Users className="h-3.5 w-3.5" />
+              {t("mainCharacter")}
+            </Link>
+          )}
+          <Button onClick={() => setCreateOpen(true)} size="sm">
+            <Plus className="mr-1.5 h-4 w-4" />
+            {t("create")}
+          </Button>
+        </div>
       </div>
 
       {/* Episode list */}

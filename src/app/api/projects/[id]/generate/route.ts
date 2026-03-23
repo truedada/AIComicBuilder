@@ -1900,10 +1900,17 @@ async function handleVideoAssembleSync(projectId: string, payload?: Record<strin
       shotDurations: projectShots.map((s) => s.duration ?? 10),
     });
 
-    await db
-      .update(projects)
-      .set({ status: "completed", finalVideoUrl: outputPath, updatedAt: new Date() })
-      .where(eq(projects.id, projectId));
+    if (episodeId) {
+      await db
+        .update(episodes)
+        .set({ status: "completed", finalVideoUrl: outputPath, updatedAt: new Date() })
+        .where(eq(episodes.id, episodeId));
+    } else {
+      await db
+        .update(projects)
+        .set({ status: "completed", finalVideoUrl: outputPath, updatedAt: new Date() })
+        .where(eq(projects.id, projectId));
+    }
 
     console.log(`[VideoAssemble] Completed: ${outputPath}`);
     return NextResponse.json({ outputPath, status: "ok" });

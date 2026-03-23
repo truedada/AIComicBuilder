@@ -56,7 +56,7 @@ export default function EpisodeCharactersPage() {
     }
 
     setExtracting(false);
-    fetchProject(project.id);
+    fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
   }
 
   async function handleBatchGenerateImages() {
@@ -85,7 +85,7 @@ export default function EpisodeCharactersPage() {
     }
 
     setGeneratingImages(false);
-    fetchProject(project.id);
+    fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
   }
 
   return (
@@ -164,7 +164,7 @@ export default function EpisodeCharactersPage() {
               description={char.description}
               visualHint={char.visualHint ?? null}
               referenceImage={char.referenceImage}
-              onUpdate={() => fetchProject(project.id)}
+              onUpdate={() => fetchProject(project.id, useProjectStore.getState().currentEpisodeId!)}
               batchGenerating={generatingImages}
               scope={char.scope}
               onPromote={
@@ -178,7 +178,7 @@ export default function EpisodeCharactersPage() {
                           body: JSON.stringify({ scope: "main", episodeId: null }),
                         }
                       );
-                      fetchProject(project.id);
+                      fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
                     }
                   : undefined
               }

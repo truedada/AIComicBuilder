@@ -147,7 +147,7 @@ export default function EpisodeStoryboardPage() {
 
     setGenerating(false);
     setSelectedVersionId(null);
-    await fetchProject(project.id);
+    await fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
   }
 
   async function handleBatchGenerateFrames(overwrite = false) {
@@ -178,7 +178,7 @@ export default function EpisodeStoryboardPage() {
 
     setGeneratingFramesOverwrite(false);
     setGeneratingFrames(false);
-    fetchProject(project.id);
+    fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
   }
 
   async function handleBatchGenerateVideos(overwrite = false) {
@@ -209,7 +209,7 @@ export default function EpisodeStoryboardPage() {
 
     setGeneratingVideosOverwrite(false);
     setGeneratingVideos(false);
-    fetchProject(project.id);
+    fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
   }
 
   async function handleBatchGenerateSceneFrames(overwrite = false) {
@@ -240,7 +240,7 @@ export default function EpisodeStoryboardPage() {
 
     setSceneFramesOverwrite(false);
     setGeneratingSceneFrames(false);
-    fetchProject(project.id);
+    fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
   }
 
   async function handleBatchGenerateVideoPrompts() {
@@ -268,7 +268,7 @@ export default function EpisodeStoryboardPage() {
     }
 
     setGeneratingVideoPrompts(false);
-    fetchProject(project.id);
+    fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
   }
 
   async function handleBatchGenerateReferenceVideos(overwrite = false) {
@@ -299,7 +299,7 @@ export default function EpisodeStoryboardPage() {
 
     setGeneratingVideosOverwrite(false);
     setGeneratingVideos(false);
-    fetchProject(project.id);
+    fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
   }
 
   async function handleAutoRun() {
@@ -374,7 +374,7 @@ export default function EpisodeStoryboardPage() {
           )}
           {totalShots > 0 && (
             <Link
-              href={`/${locale}/project/${project!.id}/preview${selectedVersionId ? `?versionId=${selectedVersionId}` : ""}`}
+              href={`/${locale}/project/${project!.id}/episodes/${useProjectStore.getState().currentEpisodeId}/preview${selectedVersionId ? `?versionId=${selectedVersionId}` : ""}`}
               className="inline-flex items-center gap-1.5 rounded-md border border-input bg-background px-3 py-1.5 text-sm font-medium shadow-xs hover:bg-accent hover:text-accent-foreground"
             >
               <Film className="h-3.5 w-3.5" />
@@ -387,7 +387,7 @@ export default function EpisodeStoryboardPage() {
               size="sm"
               onClick={() => {
                 const a = document.createElement("a");
-                a.href = `/api/projects/${project!.id}/download`;
+                a.href = `/api/projects/${project!.id}/download?episodeId=${useProjectStore.getState().currentEpisodeId}`;
                 a.download = "";
                 a.click();
               }}
@@ -482,7 +482,7 @@ export default function EpisodeStoryboardPage() {
           characters={project.characters}
           projectId={project.id}
           generationMode={generationMode}
-          onUpdate={() => fetchProject(project.id)}
+          onUpdate={() => fetchProject(project.id, useProjectStore.getState().currentEpisodeId!)}
         />
 
         {/* Batch operations */}
@@ -734,7 +734,7 @@ export default function EpisodeStoryboardPage() {
                   : shot.status
               }
               dialogues={shot.dialogues || []}
-              onUpdate={() => fetchProject(project.id)}
+              onUpdate={() => fetchProject(project.id, useProjectStore.getState().currentEpisodeId!)}
               generationMode={generationMode}
               videoRatio={videoRatio}
               isCompact={openDrawerShotId !== null}
@@ -753,7 +753,7 @@ export default function EpisodeStoryboardPage() {
           openShotId={openDrawerShotId}
           onClose={() => setOpenDrawerShotId(null)}
           onShotChange={(id) => setOpenDrawerShotId(id)}
-          onUpdate={() => fetchProject(project.id)}
+          onUpdate={() => fetchProject(project.id, useProjectStore.getState().currentEpisodeId!)}
           projectId={project.id}
           generationMode={generationMode}
           videoRatio={videoRatio}

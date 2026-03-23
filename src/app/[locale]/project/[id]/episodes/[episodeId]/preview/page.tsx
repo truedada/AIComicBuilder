@@ -84,7 +84,7 @@ export default function EpisodePreviewPage() {
       const res = await apiFetch(`/api/projects/${project.id}/generate`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "video_assemble", payload: versionId ? { versionId } : undefined }),
+        body: JSON.stringify({ action: "video_assemble", payload: versionId ? { versionId } : undefined, episodeId: useProjectStore.getState().currentEpisodeId }),
       });
       await res.json();
     } catch (err) {
@@ -92,7 +92,7 @@ export default function EpisodePreviewPage() {
       toast.error(t("common.generationFailed"));
     }
     setAssembling(false);
-    await fetchProject(project.id);
+    await fetchProject(project.id, useProjectStore.getState().currentEpisodeId!);
   }
 
   function handleDownload() {
