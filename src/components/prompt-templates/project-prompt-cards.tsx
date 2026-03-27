@@ -93,10 +93,8 @@ export function ProjectPromptCards({ projectId }: ProjectPromptCardsProps) {
   const [registry, setRegistry] = useState<RegistryEntry[]>([]);
   const [overrides, setOverrides] = useState<ProjectPromptTemplate[]>([]);
   const [loading, setLoading] = useState(true);
+  const [enabled, setEnabled] = useState(false);
   const [deletingKey, setDeletingKey] = useState<string | null>(null);
-
-  // "enabled" is derived from whether project overrides exist
-  const enabled = overrides.length > 0;
 
   // Fetch registry + project overrides on mount
   const loadData = useCallback(async () => {
@@ -110,6 +108,9 @@ export function ProjectPromptCards({ projectId }: ProjectPromptCardsProps) {
       const overData: ProjectPromptTemplate[] = await overResp.json();
       setRegistry(regData);
       setOverrides(overData);
+      if (overData.length > 0) {
+        setEnabled(true);
+      }
     } catch {
       toast.error(t("editor.save") + " failed");
     } finally {
@@ -121,10 +122,14 @@ export function ProjectPromptCards({ projectId }: ProjectPromptCardsProps) {
     loadData();
   }, [loadData]);
 
-  // Toggle: turning off removes all project overrides
+  // Toggle: turning off removes all project overrides; turning on just shows the UI
   const handleToggle = async (value: boolean) => {
-    if (!value && overrides.length > 0) {
-      // Delete all project overrides for every prompt
+    if (value) {
+      setEnabled(true);
+      return;
+    }
+    // Turning off — delete all project overrides
+    if (overrides.length > 0) {
       try {
         const promptKeys = [...new Set(overrides.map((o) => o.promptKey))];
         await Promise.all(
@@ -140,7 +145,7 @@ export function ProjectPromptCards({ projectId }: ProjectPromptCardsProps) {
         toast.error(t("editor.save") + " failed");
       }
     }
-    // Turning on doesn't need action — user will edit individual prompts
+    setEnabled(false);
   };
 
   // Compute per-prompt stats
@@ -218,8 +223,8 @@ export function ProjectPromptCards({ projectId }: ProjectPromptCardsProps) {
         )}
       </div>
 
-      {/* Card grid — always visible so user can click edit to start customizing */}
-      {(
+      {/* Card grid */}
+      {enabled && (
         <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
           {registry.map((entry) => {
             const { hasOverride, totalSlots, modifiedCount } =
