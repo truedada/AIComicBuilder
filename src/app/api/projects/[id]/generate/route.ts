@@ -10,22 +10,11 @@ import path from "path";
 import { ulid } from "ulid";
 import { enqueueTask } from "@/lib/task-queue";
 import type { TaskType } from "@/lib/task-queue";
-import {
-  SCRIPT_PARSE_SYSTEM,
-  buildScriptParsePrompt,
-} from "@/lib/ai/prompts/script-parse";
-import {
-  SCRIPT_GENERATE_SYSTEM,
-  buildScriptGeneratePrompt,
-} from "@/lib/ai/prompts/script-generate";
-import {
-  CHARACTER_EXTRACT_SYSTEM,
-  buildCharacterExtractPrompt,
-} from "@/lib/ai/prompts/character-extract";
-import {
-  buildShotSplitPrompt,
-  buildShotSplitSystem,
-} from "@/lib/ai/prompts/shot-split";
+import { buildScriptParsePrompt } from "@/lib/ai/prompts/script-parse";
+import { buildScriptGeneratePrompt } from "@/lib/ai/prompts/script-generate";
+import { buildCharacterExtractPrompt } from "@/lib/ai/prompts/character-extract";
+import { buildShotSplitPrompt } from "@/lib/ai/prompts/shot-split";
+import { resolvePrompt } from "@/lib/ai/prompts/resolver";
 import { getModelMaxDuration } from "@/lib/ai/model-limits";
 import {
   buildFirstFramePrompt,
@@ -34,7 +23,7 @@ import {
 import { buildSceneFramePrompt } from "@/lib/ai/prompts/scene-frame-generate";
 import { resolveImageProvider, resolveVideoProvider, resolveAIProvider } from "@/lib/ai/provider-factory";
 import { buildVideoPrompt, buildReferenceVideoPrompt } from "@/lib/ai/prompts/video-generate";
-import { REF_VIDEO_PROMPT_SYSTEM, buildRefVideoPromptRequest } from "@/lib/ai/prompts/ref-video-prompt-generate";
+import { buildRefVideoPromptRequest } from "@/lib/ai/prompts/ref-video-prompt-generate";
 import { buildCharacterTurnaroundPrompt } from "@/lib/ai/prompts/character-image";
 import { assembleVideo } from "@/lib/video/ffmpeg";
 
@@ -131,15 +120,15 @@ export async function POST(
   const { action, payload, modelConfig, episodeId } = body;
 
   if (action === "script_generate") {
-    return handleScriptGenerate(projectId, payload, modelConfig, episodeId);
+    return handleScriptGenerate(projectId, userId, payload, modelConfig, episodeId);
   }
 
   if (action === "script_parse") {
-    return handleScriptParseStream(projectId, modelConfig, episodeId);
+    return handleScriptParseStream(projectId, userId, modelConfig, episodeId);
   }
 
   if (action === "character_extract") {
-    return handleCharacterExtract(projectId, modelConfig, episodeId);
+    return handleCharacterExtract(projectId, userId, modelConfig, episodeId);
   }
 
   if (action === "single_character_image") {
@@ -151,7 +140,7 @@ export async function POST(
   }
 
   if (action === "shot_split") {
-    return handleShotSplitStream(projectId, modelConfig, episodeId);
+    return handleShotSplitStream(projectId, userId, modelConfig, episodeId);
   }
 
   if (action === "single_shot_rewrite") {
@@ -183,19 +172,19 @@ export async function POST(
   }
 
   if (action === "single_reference_video") {
-    return handleSingleReferenceVideo(projectId, payload, modelConfig);
+    return handleSingleReferenceVideo(projectId, userId, payload, modelConfig);
   }
 
   if (action === "batch_reference_video") {
-    return handleBatchReferenceVideo(projectId, payload, modelConfig, episodeId);
+    return handleBatchReferenceVideo(projectId, userId, payload, modelConfig, episodeId);
   }
 
   if (action === "single_video_prompt") {
-    return handleSingleVideoPrompt(projectId, payload, modelConfig);
+    return handleSingleVideoPrompt(projectId, userId, payload, modelConfig);
   }
 
   if (action === "batch_video_prompt") {
-    return handleBatchVideoPrompt(projectId, payload, modelConfig, episodeId);
+    return handleBatchVideoPrompt(projectId, userId, payload, modelConfig, episodeId);
   }
 
   if (action === "video_assemble") {
@@ -206,7 +195,7 @@ export async function POST(
   const task = await enqueueTask({
     type: action as NonNullable<TaskType>,
     projectId,
-    payload: { projectId, ...payload, modelConfig, episodeId },
+    payload: { projectId, ...payload, modelConfig, episodeId, userId },
     ...(episodeId ? { episodeId } : {}),
   });
 
@@ -217,6 +206,7 @@ export async function POST(
 
 async function handleScriptGenerate(
   projectId: string,
+  userId: string,
   payload?: Record<string, unknown>,
   modelConfig?: ModelConfig,
   episodeId?: string
@@ -247,10 +237,11 @@ async function handleScriptGenerate(
   }
 
   const model = createLanguageModel(modelConfig.text);
+  const scriptGenerateSystem = await resolvePrompt("script_generate", { userId, projectId });
 
   const result = streamText({
     model,
-    system: SCRIPT_GENERATE_SYSTEM,
+    system: scriptGenerateSystem,
     prompt: buildScriptGeneratePrompt(idea),
     temperature: 0.8,
     onFinish: async ({ text }) => {
@@ -280,6 +271,7 @@ async function handleScriptGenerate(
 
 async function handleScriptParseStream(
   projectId: string,
+  userId: string,
   modelConfig?: ModelConfig,
   episodeId?: string
 ) {
@@ -308,10 +300,11 @@ async function handleScriptParseStream(
   }
 
   const model = createLanguageModel(modelConfig.text);
+  const scriptParseSystem = await resolvePrompt("script_parse", { userId, projectId });
 
   const result = streamText({
     model,
-    system: SCRIPT_PARSE_SYSTEM,
+    system: scriptParseSystem,
     prompt: buildScriptParsePrompt(script),
     temperature: 0.7,
     onFinish: async ({ text }) => {
@@ -337,6 +330,7 @@ async function handleScriptParseStream(
 
 async function handleCharacterExtract(
   projectId: string,
+  userId: string,
   modelConfig?: ModelConfig,
   episodeId?: string
 ) {
@@ -379,10 +373,11 @@ async function handleCharacterExtract(
   }
 
   const model = createLanguageModel(modelConfig.text);
+  const charExtractSystem = await resolvePrompt("character_extract", { userId, projectId });
 
   const result = streamText({
     model,
-    system: CHARACTER_EXTRACT_SYSTEM,
+    system: charExtractSystem,
     prompt: buildCharacterExtractPrompt(script),
     onFinish: async ({ text }) => {
       try {
@@ -553,6 +548,7 @@ async function handleBatchCharacterImage(
 
 async function handleShotSplitStream(
   projectId: string,
+  userId: string,
   modelConfig?: ModelConfig,
   episodeId?: string
 ) {
@@ -605,7 +601,7 @@ async function handleShotSplitStream(
 
   const model = createLanguageModel(modelConfig.text);
   const videoMaxDuration = getModelMaxDuration(modelConfig?.video?.modelId);
-  const systemPrompt = buildShotSplitSystem(videoMaxDuration);
+  const systemPrompt = await resolvePrompt("shot_split", { userId, projectId });
   const jsonMode = { openai: { response_format: { type: "json_object" } } };
 
   // Split screenplay into chunks by SCENE markers (~8 scenes per chunk)
@@ -1623,6 +1619,7 @@ async function handleBatchSceneFrame(
 
 async function handleSingleReferenceVideo(
   projectId: string,
+  userId: string,
   payload?: Record<string, unknown>,
   modelConfig?: ModelConfig
 ) {
@@ -1731,6 +1728,7 @@ async function handleSingleReferenceVideo(
       videoPrompt = shot.videoPrompt;
     } else {
       const textProvider = resolveAIProvider(modelConfig);
+      const refVideoSystem = await resolvePrompt("ref_video_prompt", { userId, projectId });
       try {
         const motionContext = shot.motionScript || shot.videoScript || shot.prompt || "";
         const promptRequest = buildRefVideoPromptRequest({
@@ -1742,7 +1740,7 @@ async function handleSingleReferenceVideo(
         });
         console.log(`[SingleReferenceVideo] Shot ${shot.sequence} promptRequest:\n${promptRequest}`);
         const rawPrompt = await textProvider.generateText(promptRequest, {
-          systemPrompt: REF_VIDEO_PROMPT_SYSTEM,
+          systemPrompt: refVideoSystem,
           images: [sceneFramePath],
           temperature: 0.7,
         });
@@ -1792,6 +1790,7 @@ async function handleSingleReferenceVideo(
 
 async function handleBatchReferenceVideo(
   projectId: string,
+  userId: string,
   payload?: Record<string, unknown>,
   modelConfig?: ModelConfig,
   episodeId?: string
@@ -1849,6 +1848,7 @@ async function handleBatchReferenceVideo(
   const imageProvider = resolveImageProvider(modelConfig, versionedUploadDir);
   const videoProvider = resolveVideoProvider(modelConfig, versionedUploadDir);
   const textProvider = resolveAIProvider(modelConfig);
+  const refVideoSystem = await resolvePrompt("ref_video_prompt", { userId, projectId });
   const ratio = (payload?.ratio as string) || "16:9";
   const videoMaxDuration = getModelMaxDuration(modelConfig?.video?.modelId);
 
@@ -1920,7 +1920,7 @@ async function handleBatchReferenceVideo(
               dialogues: dialogueList.length > 0 ? dialogueList : undefined,
             });
             const rawPrompt = await textProvider.generateText(promptRequest, {
-              systemPrompt: REF_VIDEO_PROMPT_SYSTEM,
+              systemPrompt: refVideoSystem,
               images: [sceneFramePath],
               temperature: 0.7,
             });
@@ -2072,6 +2072,7 @@ async function handleVideoAssembleSync(projectId: string, payload?: Record<strin
 
 async function handleSingleVideoPrompt(
   projectId: string,
+  userId: string,
   payload?: Record<string, unknown>,
   modelConfig?: ModelConfig
 ) {
@@ -2121,6 +2122,7 @@ async function handleSingleVideoPrompt(
     const videoMaxDuration = getModelMaxDuration(videoModelId);
     const effectiveDuration = Math.min(shot.duration ?? 10, videoMaxDuration);
     const textProvider = resolveAIProvider(modelConfig);
+    const refVideoSystem = await resolvePrompt("ref_video_prompt", { userId, projectId });
     const motionContext = shot.motionScript || shot.videoScript || shot.prompt || "";
     const promptRequest = buildRefVideoPromptRequest({
       motionScript: motionContext,
@@ -2131,7 +2133,7 @@ async function handleSingleVideoPrompt(
     });
     console.log(`[SingleVideoPrompt] Shot ${shot.sequence} promptRequest:\n${promptRequest}`);
     const rawPrompt = await textProvider.generateText(promptRequest, {
-      systemPrompt: REF_VIDEO_PROMPT_SYSTEM,
+      systemPrompt: refVideoSystem,
       images: visionFrames,
     });
     const videoPrompt = `Duration: ${effectiveDuration}s.\n\n${rawPrompt.trim()}`;
@@ -2148,6 +2150,7 @@ async function handleSingleVideoPrompt(
 
 async function handleBatchVideoPrompt(
   projectId: string,
+  userId: string,
   payload?: Record<string, unknown>,
   modelConfig?: ModelConfig,
   episodeId?: string
@@ -2165,6 +2168,7 @@ async function handleBatchVideoPrompt(
   const eligible = batchShots.filter((s) => s.firstFrame || s.lastFrame || s.sceneRefFrame);
 
   const textProvider = resolveAIProvider(modelConfig);
+  const refVideoSystem = await resolvePrompt("ref_video_prompt", { userId, projectId });
   const videoMaxDuration = getModelMaxDuration(modelConfig?.video?.modelId);
 
   console.log(`[BatchVideoPrompt] Processing ${eligible.length} shots (${batchShots.length} total, ${batchCharacters.length} chars)`);
@@ -2210,7 +2214,7 @@ async function handleBatchVideoPrompt(
           dialogues: dialogueList.length > 0 ? dialogueList : undefined,
         });
         const rawPrompt = await textProvider.generateText(promptRequest, {
-          systemPrompt: REF_VIDEO_PROMPT_SYSTEM,
+          systemPrompt: refVideoSystem,
           images: visionFrames,
         });
         const videoPrompt = `Duration: ${effectiveDuration}s.\n\n${rawPrompt.trim()}`;
